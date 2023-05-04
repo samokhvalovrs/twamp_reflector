@@ -30,6 +30,7 @@ use std::time::*;
 use nix::libc::*;
 
 use core::ptr;
+use std::{ os::unix::io::AsRawFd};
 
 pub use nix::libc::{
     cmsghdr,
@@ -69,6 +70,17 @@ unsafe fn SocketServer() {
 /* Advanced API (RFC3542) (2).  */
 #define IPV6_RECVTCLASS		66
 #define IPV6_TCLASS		67 */
+
+unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) {
+    println!("Twamp reflector");
+    let sock = udp_sock.as_raw_fd();
+
+    nix::sys::socket::setsockopt(sock, sockopt::ReceiveTimestamp, &true).unwrap();
+    if let Some(tc) = TraffClass {
+        nix::sys::socket::setsockopt(sock, sockopt::Ipv6TClass, &tc).unwrap();
+    }
+    nix::sys::socket::setsockopt(sock, sockopt::Ipv6Ttl, &255).unwrap();     
+}
 
 unsafe fn LibcSocketServer(tc: i32) {
   println!("LibcSocket");
