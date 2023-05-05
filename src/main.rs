@@ -71,18 +71,22 @@ unsafe fn SocketServer() {
 #define IPV6_RECVTCLASS		66
 #define IPV6_TCLASS		67 */
 
-unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) {
+unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) -> Result<(), String> {
     println!("Twamp reflector");
     let sock = udp_sock.as_raw_fd();
 
-    nix::sys::socket::setsockopt(sock, sockopt::ReceiveTimestamp, &true);
+    match nix::sys::socket::setsockopt(sock, sockopt::ReceiveTimestamp, &true) {
+      Ok(()) => println!(""),
+      Err(error) => println!(""),
+    }
 
     if let Some(tc) = TraffClass {
         nix::sys::socket::setsockopt(sock, sockopt::Ipv6TClass, &tc).unwrap();
     }
-    nix::sys::socket::setsockopt(sock, sockopt::Ipv6Ttl, &255).unwrap();  
 
-    //Result::Ok(0)   
+    nix::sys::socket::setsockopt(sock, sockopt::Ipv6Ttl, &255);
+
+    Result::Ok(())   
 }
 
 unsafe fn LibcSocketServer(tc: i32) {
