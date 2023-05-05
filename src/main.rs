@@ -75,11 +75,14 @@ unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) {
     println!("Twamp reflector");
     let sock = udp_sock.as_raw_fd();
 
-    nix::sys::socket::setsockopt(sock, sockopt::ReceiveTimestamp, &true).unwrap();
+    nix::sys::socket::setsockopt(sock, sockopt::ReceiveTimestamp, &true);
+
     if let Some(tc) = TraffClass {
         nix::sys::socket::setsockopt(sock, sockopt::Ipv6TClass, &tc).unwrap();
     }
-    nix::sys::socket::setsockopt(sock, sockopt::Ipv6Ttl, &255).unwrap();     
+    nix::sys::socket::setsockopt(sock, sockopt::Ipv6Ttl, &255).unwrap();  
+
+    //Result::Ok(0)   
 }
 
 unsafe fn LibcSocketServer(tc: i32) {
