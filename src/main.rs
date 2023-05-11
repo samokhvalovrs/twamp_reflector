@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::fmt::Error;
 use std::fmt::Write;
 //use std::intrinsics::size_of;
@@ -71,22 +72,107 @@ unsafe fn SocketServer() {
 #define IPV6_RECVTCLASS		66
 #define IPV6_TCLASS		67 */
 
+const sender_offset: usize = 14;
+fn FillReflectedPacket( recv_buffer: &[u8], send_buffer: &[u8], hl: i32, tv: nix::libc::timeval ) -> usize {
+  let offset: usize = 0;
+  send_buffer[offset..offset+4].copy_from_slice(&recv_buffer[0..14]);
+  send_buffer[sender_offset..14].copy_from_slice(&recv_buffer[0..14]);
+  offset
+}
+
 unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) -> Result<(), String> {
-    println!("Twamp reflector");
-    let sock = udp_sock.as_raw_fd();
+  println!("Twamp reflector");
+  let sock = udp_sock.as_raw_fd();
 
-    match nix::sys::socket::setsockopt(sock, sockopt::ReceiveTimestamp, &true) {
-      Ok(()) => println!(""),
-      Err(error) => println!(""),
+  match nix::sys::socket::setsockopt(sock, sockopt::ReceiveTimestamp, &true) {
+    Ok(()) => println!("option ReceiveTimestamp set"),
+    Err(error) => return Result::Err(format!("Cannot set sockopt ReceiveTimestamp: error {}", error)),
+  }
+  
+  if let Some(tc) = TraffClass {
+    match nix::sys::socket::setsockopt(sock, sockopt::Ipv6TClass, &tc) {
+      Ok(()) => println!("option Ipv6TClass set"),
+      Err( error ) => return Result::Err(format!("Cannot set sockopt Ipv6TClass: error {}", error)),
+    }
+  }
+
+  match nix::sys::socket::setsockopt(sock, sockopt::Ipv6Ttl, &255) {
+    Ok(()) => println!("option Ipv6Ttl set"),
+    Err( error ) => return Result::Err(format!("Cannot set sockopt Ipv6Ttl: error {}", error)),
+  }
+
+  let mut yes: [u8;4] = [0,0,0,1];
+  let mut r = setsockopt(sock, nix::libc::IPPROTO_IPV6, nix::libc::IPV6_RECVHOPLIMIT, yes.as_mut_ptr() as *const c_void, 4 );
+  if r < 0  {
+    return Result::Err(format!("Cannot set sockopt IPV6_RECVHOPLIMIT {}", r));
+  }
+  r = setsockopt(sock, nix::libc::IPPROTO_IPV6, nix::libc::IPV6_RECVTCLASS, yes.as_mut_ptr() as *const c_void, 4);
+  if r < 0  {
+    return Result::Err(format!("Cannot set sockopt IPV6_RECVTCLASS {}", r));
+  }
+
+  let mut addr_buff: [u8;16] = [0u8;16];
+  let mut recv_buff: [u8;2048] = [0u8;2048];
+  let mut control_buff: [u8;2048] = [0u8;2048];
+  let mut data: *mut u8;
+  let mut hl = 0;
+  let mut tc = 0;
+  let mut tv: nix::libc::timeval;
+  let mut io_vec: iovec = iovec { iov_base: (recv_buff.as_mut_ptr() as *mut c_void), iov_len: (2048) };
+  let mut message: msghdr = msghdr { msg_name: addr_buff.as_mut_ptr() as *mut c_void, msg_namelen: (16), msg_iov: (&mut io_vec), msg_iovlen: (1), msg_control: (control_buff.as_mut_ptr() as *mut c_void), msg_controllen: (2048), msg_flags: (0) };
+   
+  loop {
+    
+    println!("recvmsg calling");
+    let recved = nix::libc::recvmsg( sock, &mut message, 0); 
+    println!("recved: {} message cl {} flags {}", recved, message.msg_controllen, message.msg_flags);
+    if recved < 0 {
+     return Result::Err(format!("recv error {}", recved));
+    }
+    let mut c_hdr_ref = CMSG_FIRSTHDR( &message as *const _);  
+    while !c_hdr_ref.is_null() {
+      println!("cmsg_level: {}, cmsg_type: {}", (*c_hdr_ref).cmsg_level, (*c_hdr_ref).cmsg_type);
+      data = CMSG_DATA(c_hdr_ref);
+      match ((*c_hdr_ref).cmsg_level, (*c_hdr_ref).cmsg_type) {      
+        (nix::libc::IPPROTO_IPV6, nix::libc::IPV6_HOPLIMIT) => {
+          hl = ptr::read_unaligned(data as *const _);
+          println!("hl = {}", hl);
+        },
+        (nix::libc::IPPROTO_IPV6, nix::libc::IPV6_TCLASS) => {
+          tc = ptr::read_unaligned(data as *const _);
+          println!("tc = {}", tc);
+        },
+        (SOL_SOCKET, SCM_TIMESTAMP) => {
+          tv = ptr::read_unaligned(data as *const _);
+          println!("tv = {} + {}", tv.tv_sec, tv.tv_usec);
+        },
+        (_, _) => {
+          println!("unknown cmsg_level: {}, cmag_type: {}", (*c_hdr_ref).cmsg_level, (*c_hdr_ref).cmsg_type); 
+        },
+      }
+      c_hdr_ref = CMSG_NXTHDR(&message as *const _, c_hdr_ref);
     }
 
-    if let Some(tc) = TraffClass {
-        nix::sys::socket::setsockopt(sock, sockopt::Ipv6TClass, &tc).unwrap();
+    if tc != 0 {
+      match nix::sys::socket::setsockopt(sock, sockopt::Ipv6TClass, &tc) {
+        Ok(()) => println!("option Ipv6TClass set"),
+        Err( error ) => break,
+      }
     }
 
-    nix::sys::socket::setsockopt(sock, sockopt::Ipv6Ttl, &255);
+    let send_buff: [u8;2048] = [0u8;2048];
+    let _size: usize = FillReflectedPacket( &recv_buff, &send_buff, hl, tv);
+    let mut sended = 0;
+    udp_sock.set_ttl(255);
+    while sended < _size {
+      match udp_sock.send_to(&send_buff[sended.._size-sended], addr ) {
+        Ok(count) => sended += count,
+        Err( error )=> return Result::Err(error.to_string()),
+      };
+    }
+  }
 
-    Result::Ok(())   
+  Result::Ok(())   
 }
 
 unsafe fn LibcSocketServer(tc: i32) {
@@ -626,6 +712,7 @@ fn format_array_as_hex_string(bs: &[u8]) -> String {
     }
     visible
 }
+
 
 fn main() {
 
