@@ -72,8 +72,10 @@ unsafe fn SocketServer() {
 #define IPV6_RECVTCLASS		66
 #define IPV6_TCLASS		67 */
 
+use core::array::TryFromSliceError;
+
 const sender_offset: usize = 14;
-fn FillReflectedPacket( recv_buffer: &[u8], send_buffer: &[u8], hl: i32, tv: nix::libc::timeval ) -> usize {
+fn FillReflectedPacket( recv_buffer: &[u8], send_buffer: &mut [u8], hl: i32, tv: nix::libc::timeval ) -> usize {
   let offset: usize = 0;
   send_buffer[offset..offset+4].copy_from_slice(&recv_buffer[0..14]);
   send_buffer[sender_offset..14].copy_from_slice(&recv_buffer[0..14]);
@@ -111,15 +113,16 @@ unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) -> Resu
     return Result::Err(format!("Cannot set sockopt IPV6_RECVTCLASS {}", r));
   }
 
-  let mut addr_buff: [u8;16] = [0u8;16];
+  let mut addr_buff: [u8;32] = [0u8;32];
   let mut recv_buff: [u8;2048] = [0u8;2048];
+  let mut send_buff: [u8;2048] = [0u8;2048];
   let mut control_buff: [u8;2048] = [0u8;2048];
   let mut data: *mut u8;
   let mut hl = 0;
   let mut tc = 0;
-  let mut tv: nix::libc::timeval;
+  let mut tv: nix::libc::timeval = nix::libc::timeval{ tv_sec: 0, tv_usec: 0};
   let mut io_vec: iovec = iovec { iov_base: (recv_buff.as_mut_ptr() as *mut c_void), iov_len: (2048) };
-  let mut message: msghdr = msghdr { msg_name: addr_buff.as_mut_ptr() as *mut c_void, msg_namelen: (16), msg_iov: (&mut io_vec), msg_iovlen: (1), msg_control: (control_buff.as_mut_ptr() as *mut c_void), msg_controllen: (2048), msg_flags: (0) };
+  let mut message: msghdr = msghdr { msg_name: addr_buff.as_mut_ptr() as *mut c_void, msg_namelen: (32), msg_iov: (&mut io_vec), msg_iovlen: (1), msg_control: (control_buff.as_mut_ptr() as *mut c_void), msg_controllen: (2048), msg_flags: (0) };
    
   loop {
     
@@ -159,13 +162,41 @@ unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) -> Resu
         Err( error ) => break,
       }
     }
+   
+    println!("addr_buff: {}", format_array_as_hex_string(&addr_buff));
 
-    let send_buff: [u8;2048] = [0u8;2048];
-    let _size: usize = FillReflectedPacket( &recv_buff, &send_buff, hl, tv);
+    println!("addr_buff[8..24]: {}", format_array_as_hex_string(&addr_buff[8..24]));
+    let res: Result<[u8;16], TryFromSliceError > = addr_buff[8..24].try_into();
+    let ipv6_dst: std::net::Ipv6Addr = match res {
+      Ok(b) => std::net::Ipv6Addr::from(b),
+      Err(e) => return Result::Err("failed to get ip scr".to_string() ),
+    }; 
+    println!("addr_buff[2..4]: {}", format_array_as_hex_string(&addr_buff[2..4]));
+    let port_dst = match addr_buff[2..4].try_into() {
+      Ok(b) => u16::from_le_bytes(b),
+      Err(e) => return Result::Err("failed to get scr port".to_string() ),
+    };
+    println!("addr_buff[4..8]: {}", format_array_as_hex_string(&addr_buff[4..8]));
+    let flow_dst = match addr_buff[4..8].try_into() {
+      Ok(b) => u32::from_ne_bytes(b),
+      Err(e) => return Result::Err("failed to get scr flow".to_string() ),
+    };
+    println!("addr_buff[24..28]: {}", format_array_as_hex_string(&addr_buff[24..28]));
+    let scope_dst = match addr_buff[24..28].try_into() {
+      Ok(b) => u32::from_ne_bytes(b),
+      Err(e) => return Result::Err("failed to get scr scope".to_string() ),
+    };
+
+   
+    let ipv6_sock_dst: SocketAddrV6 = SocketAddrV6::new(ipv6_dst, port_dst, flow_dst, scope_dst);
+
+    println!("dst = {}", ipv6_sock_dst);
+   
+    let _size: usize = FillReflectedPacket( &recv_buff, &mut send_buff, hl, tv);
     let mut sended = 0;
     udp_sock.set_ttl(255);
     while sended < _size {
-      match udp_sock.send_to(&send_buff[sended.._size-sended], addr ) {
+      match udp_sock.send_to(&send_buff[sended.._size-sended], ipv6_sock_dst ) {
         Ok(count) => sended += count,
         Err( error )=> return Result::Err(error.to_string()),
       };
@@ -716,6 +747,28 @@ fn format_array_as_hex_string(bs: &[u8]) -> String {
 
 fn main() {
 
+  let mut port: u16 = 9999;
+  let pport = &port;
+
+  let listen_addr: net::Ipv6Addr = net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1);
+  
+  println!("created IPv6 {}", listen_addr.to_string() );
+
+  let listen_sock_addr: net::SocketAddrV6 = net::SocketAddrV6::new(listen_addr, port, 0, 0);
+  
+  println!("binding on UDP socket {}:{}", listen_addr.to_string(), pport );
+
+  let listen_socket = match net::UdpSocket::bind(listen_sock_addr) {
+    Ok(sock) => sock,
+    Err(error) => panic!("Couldn't bind socket {}", error ),
+  };
+
+  println!("binded" );
+
+  unsafe {
+    TwampReflector( listen_socket, Some(3)).unwrap();
+  }
+  return;
 
 
   unsafe {
