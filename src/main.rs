@@ -67,7 +67,6 @@ unsafe fn SocketServer() {
 #define IPV6_RECVPATHMTU	60
 #define IPV6_PATHMTU		61
 #define IPV6_DONTFRAG		62
-
 /* Advanced API (RFC3542) (2).  */
 #define IPV6_RECVTCLASS		66
 #define IPV6_TCLASS		67 */
@@ -77,8 +76,9 @@ use core::array::TryFromSliceError;
 const sender_offset: usize = 14;
 fn FillReflectedPacket( recv_buffer: &[u8], send_buffer: &mut [u8], hl: i32, tv: nix::libc::timeval ) -> usize {
   let offset: usize = 0;
-  send_buffer[offset..offset+4].copy_from_slice(&recv_buffer[0..14]);
-  send_buffer[sender_offset..14].copy_from_slice(&recv_buffer[0..14]);
+  //send_buffer[offset..offset+4].copy_from_slice(&recv_buffer[0..14]);
+  send_buffer[sender_offset..sender_offset + 17].copy_from_slice(&recv_buffer[0..17]);
+  println!("hl = {}", format_array_as_hex_string( &(hl.to_le_bytes()) ) );
   offset
 }
 
@@ -173,17 +173,18 @@ unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) -> Resu
     }; 
     println!("addr_buff[2..4]: {}", format_array_as_hex_string(&addr_buff[2..4]));
     let port_dst = match addr_buff[2..4].try_into() {
-      Ok(b) => u16::from_le_bytes(b),
+      Ok(b) => (u16::from_ne_bytes(b)).swap_bytes(),
       Err(e) => return Result::Err("failed to get scr port".to_string() ),
     };
+    println!("dst port = {}", port_dst);
     println!("addr_buff[4..8]: {}", format_array_as_hex_string(&addr_buff[4..8]));
     let flow_dst = match addr_buff[4..8].try_into() {
-      Ok(b) => u32::from_ne_bytes(b),
+      Ok(b) => u32::from_ne_bytes(b).swap_bytes(),
       Err(e) => return Result::Err("failed to get scr flow".to_string() ),
     };
     println!("addr_buff[24..28]: {}", format_array_as_hex_string(&addr_buff[24..28]));
     let scope_dst = match addr_buff[24..28].try_into() {
-      Ok(b) => u32::from_ne_bytes(b),
+      Ok(b) => u32::from_ne_bytes(b).swap_bytes(),
       Err(e) => return Result::Err("failed to get scr scope".to_string() ),
     };
 
