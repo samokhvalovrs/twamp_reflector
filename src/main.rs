@@ -73,6 +73,7 @@ unsafe fn SocketServer() {
 
 use core::array::TryFromSliceError;
 
+const MIN_TWAMP_TEST_PACKET: isize = 14;
 const sender_offset: usize = 14;
 fn FillReflectedPacket( recv_buffer: &[u8], send_buffer: &mut [u8], hl: i32, tv: nix::libc::timeval ) -> usize {
   let offset: usize = 0;
@@ -131,6 +132,10 @@ unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) -> Resu
     println!("recved: {} message cl {} flags {}", recved, message.msg_controllen, message.msg_flags);
     if recved < 0 {
      return Result::Err(format!("recv error {}", recved));
+    }
+    if recved < MIN_TWAMP_TEST_PACKET  {
+      println!("Malformed TWAMP TEST packet");
+      continue;
     }
     let mut c_hdr_ref = CMSG_FIRSTHDR( &message as *const _);  
     while !c_hdr_ref.is_null() {
