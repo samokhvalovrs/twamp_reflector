@@ -73,8 +73,85 @@ unsafe fn SocketServer() {
 
 use core::array::TryFromSliceError;
 
+/*
+TEST Protocol
+SessionSender UDP
+  For unauthenticated mode:
+      0                   1                   2                   3
+      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |                        Sequence Number                        |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |                          Timestamp                            |
+     |                                                               |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |        Error Estimate         |                               |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               |
+     |                                                               |
+     .                                                               .
+     .                         Packet Padding                        .
+     .                                                               .
+     |                                                               |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+2) Timestamp is represented as follows:
+      0                   1                   2                   3
+      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |                   Integer part of seconds                     |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |                 Fractional part of seconds                    |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  void timeval_to_timestamp(const struct timeval *tv, TWAMPTimestamp * ts)
+  {
+    if (!tv || !ts)
+        return;
+
+    /* Unix time to NTP */
+    ts->integer = tv->tv_sec + 2208988800uL;
+    ts->fractional = (uint32_t) ((double)tv->tv_usec * ((double)(1uLL << 32)
+                                                        / (double)1e6));
+
+    ts->integer = htonl(ts->integer);
+    ts->fractional = htonl(ts->fractional);
+  }
+
+SessionReflector UDP
+  For unauthenticated mode:
+   0                   1                   2                   3
+   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                        Sequence Number                        |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                          Timestamp                            |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Error Estimate        |           MBZ                 |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                          Receive Timestamp                    |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                        Sender Sequence Number                 |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                      Sender Timestamp                         |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |      Sender Error Estimate    |           MBZ                 |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |  Sender TTL   |                                               |
+   +-+-+-+-+-+-+-+-+                                               +
+   |                                                               |
+   .                                                               .
+   .                         Packet Padding                        .
+   .                                                               .
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+*/
+
 const MIN_TWAMP_TEST_PACKET: isize = 14;
 const sender_offset: usize = 14;
+const ErrorEstimate: u32 = 0x80000001;
 fn FillReflectedPacket( recv_buffer: &[u8], send_buffer: &mut [u8], hl: i32, tv: nix::libc::timeval ) -> usize {
   let offset: usize = 0;
   //send_buffer[offset..offset+4].copy_from_slice(&recv_buffer[0..14]);
@@ -750,8 +827,21 @@ fn format_array_as_hex_string(bs: &[u8]) -> String {
     visible
 }
 
+//use chrono::{DateTime, Local, Utc};
+use std::time::{SystemTime};
 
 fn main() {
+
+   let mut timespec = nix::libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+  unsafe {
+    nix::libc::clock_gettime(nix::libc::CLOCK_REALTIME, &mut timespec);
+  }
+
+  //let utc: DateTime = Utc::now();
+  //println!("Current Date and Time in UTC {:?}", utc);
 
   let mut port: u16 = 9999;
   let pport = &port;
@@ -775,6 +865,28 @@ fn main() {
     TwampReflector( listen_socket, Some(3)).unwrap();
   }
   return;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
   unsafe {
