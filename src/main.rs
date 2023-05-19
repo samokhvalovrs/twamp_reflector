@@ -118,7 +118,7 @@ fn fill_test_packet( send_buffer: &mut [u8], seq_num: u32 ) {
   let mut ts_offset: usize = std::mem::size_of::<u32>();
   offset += (std::mem::size_of::<u32>() * 2);
   
-  //3. ErrorEsimate 
+  //3. ErrorEsimate (т.к. берем clock синхронизованный с NTP сервером, то s = 1, mult = 1 )
   send_buffer[offset..offset + std::mem::size_of::<u16>()].copy_from_slice(&ErrorEstimate.swap_bytes().to_le_bytes());
   offset += std::mem::size_of::<u16>();
   
