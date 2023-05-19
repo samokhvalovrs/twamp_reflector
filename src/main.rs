@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::fmt::Error;
 use std::fmt::Write;
 //use std::intrinsics::size_of;
+//use std::intrinsics::size_of;
 use std::io::IoSliceMut;
 use std::io::stdout;
 use std::net::SocketAddr;
@@ -44,16 +45,10 @@ pub use nix::libc::{
     sockaddr_un,
 };
 
-/*
-unsafe fn SocketServer() {
-  let sock = nix::libc::socket( AddressFamily::Inet6 as i32, SockType::Datagram as i32, 0 );
- 
-  let addr_in6: nix::libc::in6_addr = in6_addr{ s6_addr: ([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1])};
-  let sock_addr_in6: nix::libc::sockaddr_in6 = sockaddr_in6 { sin6_family: (AddressFamily::Inet6 as u16), sin6_port: (9999), sin6_flowinfo: (0), sin6_addr: (addr_in6), sin6_scope_id: (0) };
-  let addr: nix::libc::sockaddr = nix::libc::sockaddr{ sa_family: 10, sa_data: []};
-  let bnd = nix::libc::bind( sock, &addr, 28 ); 
-}
-*/
+use std::time::{SystemTime};
+extern crate chrono;
+use chrono::offset::Utc;
+use chrono::DateTime;
 
 /*#define IPV6_RECVHOPLIMIT	51
 #define IPV6_HOPLIMIT		52
@@ -93,71 +88,99 @@ SessionSender UDP
      .                                                               .
      |                                                               |
      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-2) Timestamp is represented as follows:
-      0                   1                   2                   3
-      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-     |                   Integer part of seconds                     |
-     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-     |                 Fractional part of seconds                    |
-     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  void timeval_to_timestamp(const struct timeval *tv, TWAMPTimestamp * ts)
-  {
-    if (!tv || !ts)
-        return;
-
-    /* Unix time to NTP */
-    ts->integer = tv->tv_sec + 2208988800uL;
-    ts->fractional = (uint32_t) ((double)tv->tv_usec * ((double)(1uLL << 32)
-                                                        / (double)1e6));
-
-    ts->integer = htonl(ts->integer);
-    ts->fractional = htonl(ts->fractional);
-  }
-
-SessionReflector UDP
-  For unauthenticated mode:
-   0                   1                   2                   3
-   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |                        Sequence Number                        |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |                          Timestamp                            |
-   |                                                               |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |         Error Estimate        |           MBZ                 |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |                          Receive Timestamp                    |
-   |                                                               |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |                        Sender Sequence Number                 |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |                      Sender Timestamp                         |
-   |                                                               |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |      Sender Error Estimate    |           MBZ                 |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |  Sender TTL   |                                               |
-   +-+-+-+-+-+-+-+-+                                               +
-   |                                                               |
-   .                                                               .
-   .                         Packet Padding                        .
-   .                                                               .
-   |                                                               |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
 */
+
+pub struct TwampTS {
+  integer: i64,
+  fractional: i64
+}
+fn timeval_to_timestamp( tv: nix::libc::timeval ) -> TwampTS {
+  let mut ret: TwampTS = TwampTS{ integer: 0, fractional: 0 };
+  ret.integer = tv.tv_sec + 2208988800;
+  ret.fractional = tv.tv_usec * ((1i64 << 32) / 1000000);
+  ret
+}
 
 const MIN_TWAMP_TEST_PACKET: isize = 14;
 const sender_offset: usize = 14;
-const ErrorEstimate: u32 = 0x80000001;
-fn FillReflectedPacket( recv_buffer: &[u8], send_buffer: &mut [u8], hl: i32, tv: nix::libc::timeval ) -> usize {
-  let offset: usize = 0;
-  //send_buffer[offset..offset+4].copy_from_slice(&recv_buffer[0..14]);
-  send_buffer[sender_offset..sender_offset + 17].copy_from_slice(&recv_buffer[0..17]);
-  println!("hl = {}", format_array_as_hex_string( &(hl.to_le_bytes()) ) );
-  offset
+const ErrorEstimate: u16 = 0x8001;
+const MBZ16: u16 = 0;
+
+fn fill_test_packet( send_buffer: &mut [u8], seq_num: u32 ) {
+  let mut offset: usize = 0;
+  //1. Sequence Number
+  send_buffer[..std::mem::size_of::<u32>()].copy_from_slice(&seq_num.swap_bytes().to_le_bytes());
+  offset += std::mem::size_of::<u32>();
+  
+  //2. Timestamp 
+  //проставим в последнюю очередь для выполения максимального приближения времени отправки пакета
+  //см. ниже
+  let mut ts_offset: usize = std::mem::size_of::<u32>();
+  offset += (std::mem::size_of::<u32>() * 2);
+  
+  //3. ErrorEsimate 
+  send_buffer[offset..offset + std::mem::size_of::<u16>()].copy_from_slice(&ErrorEstimate.swap_bytes().to_le_bytes());
+  offset += std::mem::size_of::<u16>();
+  
+  //2. Timestamp 
+  let datetime: DateTime<Utc> = SystemTime::now().into();
+  send_buffer[ts_offset..ts_offset + std::mem::size_of::<u32>()].copy_from_slice(&(datetime.timestamp() as u32).swap_bytes().to_le_bytes() );
+  ts_offset += std::mem::size_of::<u32>();
+  send_buffer[ts_offset..ts_offset + std::mem::size_of::<u32>()].copy_from_slice(&datetime.timestamp_subsec_nanos().swap_bytes().to_le_bytes() );
+    
+}
+  
+
+fn fill_reflecting_packet( recv_buffer: &[u8], send_buffer: &mut [u8], recved: usize, hl: i32, tv: nix::libc::timeval ) -> usize {
+  //let ts_offset: usize = std::mem::size_of::<u32>();
+  let mut ret: usize = 0;
+  //1. Sequence Number
+  //Т.к. TWAMP Ligth считаем, что состояние тестовой сессии на reflectore неизвестно, поэтому
+  // копируем Seq из полученного пакета  
+  
+  send_buffer[..std::mem::size_of::<u32>()].copy_from_slice(&recv_buffer[..std::mem::size_of::<u32>()]);
+  ret += std::mem::size_of::<u32>();
+  
+  //2. Timestamp 
+  //проставим в последнюю очередь для выполения максимального приближения времени отправки пакета
+  //см. ниже
+  let mut ts_offset: usize = std::mem::size_of::<u32>();
+  ret += (std::mem::size_of::<u32>() * 2);
+  
+  //3. ErrorEsimate и MBZ
+  //т.к. буфер переиспользуемый, обнулим MBZ
+  send_buffer[ret..ret + std::mem::size_of::<u16>()].copy_from_slice(&ErrorEstimate.swap_bytes().to_le_bytes());
+  ret += std::mem::size_of::<u16>();
+  send_buffer[ret..ret + std::mem::size_of::<u16>()].copy_from_slice(&MBZ16.to_le_bytes());
+  ret += std::mem::size_of::<u16>();
+
+  //4. Receive Timestamp
+  let twamp_ts = timeval_to_timestamp(tv);
+  send_buffer[ret..ret + std::mem::size_of::<u32>()].copy_from_slice(&(twamp_ts.integer as u32).swap_bytes().to_le_bytes() );
+  ret += std::mem::size_of::<u32>();
+  send_buffer[ret..ret + std::mem::size_of::<u32>()].copy_from_slice(&(twamp_ts.fractional as u32).swap_bytes().to_le_bytes() );
+  ret += std::mem::size_of::<u32>();
+
+  //5. Часть пакета sender (seq, ts, error)
+  send_buffer[ret..ret + 16].copy_from_slice(&recv_buffer[..16]);
+  ret += 16;
+
+  //6. TTL
+  send_buffer[ret..(ret + std::mem::size_of::<u8>())].copy_from_slice(&(hl as u8).to_le_bytes() );
+  ret += std::mem::size_of::<u8>();
+  
+  //2. Timestamp 
+  let datetime: DateTime<Utc> = SystemTime::now().into();
+  send_buffer[ts_offset..ts_offset + std::mem::size_of::<u32>()].copy_from_slice(&(datetime.timestamp() as u32).swap_bytes().to_le_bytes() );
+  ts_offset += std::mem::size_of::<u32>();
+  send_buffer[ts_offset..ts_offset + std::mem::size_of::<u32>()].copy_from_slice(&datetime.timestamp_subsec_nanos().swap_bytes().to_le_bytes() );
+  
+  if ret >= recved {
+    ret
+  }
+  else {
+    recved
+  }
 }
 
 unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) -> Result<(), String> {
@@ -275,9 +298,14 @@ unsafe fn TwampReflector( udp_sock: UdpSocket, TraffClass: Option<i32> ) -> Resu
 
     println!("dst = {}", ipv6_sock_dst);
    
-    let _size: usize = FillReflectedPacket( &recv_buff, &mut send_buff, hl, tv);
+    match udp_sock.set_ttl(255) {
+      Ok(()) => println!(""),
+      Err(err) => println!("Cannot set ttl {}", err.to_string()),
+    }
+
+    let _size: usize = fill_reflecting_packet( &recv_buff, &mut send_buff, recved as usize, hl, tv);
     let mut sended = 0;
-    udp_sock.set_ttl(255);
+    
     while sended < _size {
       match udp_sock.send_to(&send_buff[sended.._size-sended], ipv6_sock_dst ) {
         Ok(count) => sended += count,
@@ -828,18 +856,36 @@ fn format_array_as_hex_string(bs: &[u8]) -> String {
 }
 
 //use chrono::{DateTime, Local, Utc};
-use std::time::{SystemTime};
+
 
 fn main() {
 
-   let mut timespec = nix::libc::timespec {
+  let t: TwampTS = TwampTS { integer: (0), fractional: (0) };
+  println!("ts len = {}", std::mem::size_of::<TwampTS>());
+  //return;
+
+  let mut timespec = nix::libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,
-        };
+  };
   unsafe {
     nix::libc::clock_gettime(nix::libc::CLOCK_REALTIME, &mut timespec);
   }
+  println!("{} {}", timespec.tv_sec, timespec.tv_nsec );
 
+  let st = SystemTime::now();
+  let datetime: DateTime<Utc> = st.into();
+  
+  println!("{} {}", datetime.timestamp(), datetime.timestamp_subsec_nanos() );
+  println!( "sec as is = {}", format_array_as_hex_string( &(datetime.timestamp() as u32).to_le_bytes()) );
+  println!( "usec as is = {}", format_array_as_hex_string(  &datetime.timestamp_subsec_nanos().to_le_bytes() ) );
+
+  
+  println!( "sec = {}", format_array_as_hex_string( &(datetime.timestamp() as u32).swap_bytes().to_le_bytes()) );
+  println!( "usec = {}", format_array_as_hex_string(  &datetime.timestamp_subsec_nanos().swap_bytes().to_le_bytes() ) );
+
+  //return;
+  
   //let utc: DateTime = Utc::now();
   //println!("Current Date and Time in UTC {:?}", utc);
 
