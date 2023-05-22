@@ -106,6 +106,20 @@ const sender_offset: usize = 14;
 const ErrorEstimate: u16 = 0x8001;
 const MBZ16: u16 = 0;
 
+pub struct ReflectedPacket {
+  SeqNum: u32,
+  ReflectorTS: TwampTS,
+  RecvByReflectorTS: TwampTS,
+  RecvedTTL: u8,
+  SenderSeqNum: u32,
+  SenderTS: TwampTS,
+  
+}
+
+fn parse_reflected_packet( recv_buffer: &[u8], recved: usize ) {
+
+}
+
 fn fill_test_packet( send_buffer: &mut [u8], seq_num: u32 ) {
   let mut offset: usize = 0;
   //1. Sequence Number
@@ -136,8 +150,7 @@ fn fill_reflecting_packet( recv_buffer: &[u8], send_buffer: &mut [u8], recved: u
   let mut ret: usize = 0;
   //1. Sequence Number
   //Т.к. TWAMP Ligth считаем, что состояние тестовой сессии на reflectore неизвестно, поэтому
-  // копируем Seq из полученного пакета  
-  
+  // копируем Seq из полученного пакета    
   send_buffer[..std::mem::size_of::<u32>()].copy_from_slice(&recv_buffer[..std::mem::size_of::<u32>()]);
   ret += std::mem::size_of::<u32>();
   
